@@ -1,8 +1,18 @@
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.21.0"
+    }
+  }
+  required_version = ">= 1.14.0"
+}
+
 provider "aws" {
   region                   = "us-east-1"
   shared_config_files      = ["$HOME/.aws/config"]
   shared_credentials_files = ["$HOME/.aws/credentials"]
-  profile                  = "default"
+  profile                  = "PowerUserAccess-408876511723"
 }
 
 resource "aws_vpc" "main" {
@@ -13,13 +23,18 @@ resource "aws_vpc" "main" {
   }
 }
 
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
 resource "aws_subnet" "public" {
+  count                   = 3
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.1.0/24"
-  availability_zone       = "us-east-1a"
+  cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
   tags = {
-    Name = "public"
+    Name = "public-${count.index}"
   }
 }
 
@@ -46,7 +61,7 @@ resource "aws_route_table" "public" {
 }
 
 resource "aws_route_table_association" "public_assoc" {
-  subnet_id      = aws_subnet.public.id
+  subnet_id      = aws_subnet.public[*].id
   route_table_id = aws_route_table.public.id
 }
 
@@ -80,7 +95,7 @@ resource "aws_route_table_association" "private_assoc" {
 }
 
 data "aws_ami" "ubuntu" {
-  most_recent  = true
+  most_recent = true
   filter {
     name   = "name"
     values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
@@ -91,7 +106,7 @@ data "aws_ami" "ubuntu" {
 resource "aws_launch_template" "app_template" {
   image_id               = data.aws_ami.ubuntu.id
   instance_type          = "t2.micro"
-  user_data              = file("./userdata.sh")
+  user_data              = base64encode(file("./userdata.sh"))
   vpc_security_group_ids = [aws_security_group.instances.id]
   network_interfaces {
     associate_public_ip_address = true
@@ -117,8 +132,8 @@ resource "aws_autoscaling_group" "asg" {
   desired_capacity    = 1
   min_size            = 1
   max_size            = 3
-  vpc_zone_identifier = [aws_subnet.public.id]
-  target_group_arns   = aws_lb_target_group.alb_tg.arn
+  vpc_zone_identifier = aws_subnet.public[*].id
+  target_group_arns   = [aws_lb_target_group.alb_tg.arn]
 
   launch_template {
     id      = aws_launch_template.app_template.id
@@ -159,16 +174,15 @@ resource "aws_lb" "alb" {
   internal                   = false
   load_balancer_type         = "application"
   security_groups            = [aws_security_group.alb.id]
-  subnets                    = [aws_subnet.public.id]
+  subnets                    = aws_subnet.public[*].id
   enable_deletion_protection = true
 }
 
 resource "aws_lb_target_group" "alb_tg" {
-  name        = "alb-tg"
-  target_type = "alb"
-  port        = 80
-  protocol    = "HTTP"
-  vpc_id      = aws_vpc.main.id
+  name     = "alb-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.main.id
 
   health_check {
     path                = "/"
@@ -238,6 +252,14 @@ resource "aws_security_group" "instances" {
   }
 }
 
+resource "aws_db_subnet_group" "rds" {
+  name       = "rds-subnet-group"
+  subnet_ids = [aws_subnet.private.id]
+  tags = {
+    Name = "rds-subnet-group"
+  }
+}
+
 resource "aws_db_instance" "rds" {
   db_name                     = "app_rds"
   allocated_storage           = 10
@@ -248,7 +270,7 @@ resource "aws_db_instance" "rds" {
   username                    = "admin"
   manage_master_user_password = true # managed master password via secrets manager (default KMS key)
   parameter_group_name        = "default.mysql8.0"
-  db_subnet_group_name        = aws_subnet.private.id
+  db_subnet_group_name        = aws_db_subnet_group.rds.name
   deletion_protection         = true
   storage_encrypted           = true
   multi_az                    = true
