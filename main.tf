@@ -195,7 +195,7 @@ resource "aws_lb" "alb" {
   load_balancer_type         = "application"
   security_groups            = [aws_security_group.alb.id]
   subnets                    = aws_subnet.public[*].id
-  enable_deletion_protection = true
+  enable_deletion_protection = false
 }
 
 resource "aws_lb_target_group" "alb_tg" {
@@ -291,7 +291,7 @@ resource "aws_db_instance" "rds" {
   manage_master_user_password = true # managed master password via secrets manager (default KMS key)
   parameter_group_name        = "default.mysql8.0"
   db_subnet_group_name        = aws_db_subnet_group.rds.name
-  deletion_protection         = true
+  deletion_protection         = false
   storage_encrypted           = true
   multi_az                    = true
 }
