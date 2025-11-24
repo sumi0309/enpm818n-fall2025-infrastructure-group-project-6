@@ -19,7 +19,7 @@ resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_hostnames = true
   tags = {
-    Name = "main"
+    Name = "enpm818n-vpc"
   }
 }
 
@@ -39,7 +39,7 @@ resource "aws_subnet" "public" {
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
   tags = {
-    Name = "public-${count.index}"
+    Name = "enpm818n-public-subnet-${count.index}"
   }
 }
 
@@ -54,12 +54,16 @@ resource "aws_subnet" "private" {
   cidr_block        = var.private_subnet_cidrs[count.index]
   availability_zone = data.aws_availability_zones.available.names[count.index]
   tags = {
-    Name = "private-${count.index}"
+    Name = "enpm818n-private-subnet-${count.index}"
   }
 }
 
-resource "aws_internet_gateway" "igw" {
+resource "aws_internet_gateway" "gw" {
   vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "enpm818n-igw"
+  }
 }
 
 resource "aws_route_table" "public" {
@@ -68,7 +72,7 @@ resource "aws_route_table" "public" {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
   }
-  tags = { Name = "public-rt" }
+  tags = { Name = "enpm818n-public-rt" }
 }
 
 resource "aws_route_table_association" "public_assoc" {
@@ -83,7 +87,7 @@ resource "aws_eip" "nat" {
   associate_with_private_ip = "10.0.${count.index + 4}.2"
   depends_on                = [aws_internet_gateway.igw]
   tags = {
-    Name = "nat-eip-${count.index}"
+    Name = "enpm818n-nat-eip-${count.index}"
   }
 }
 
@@ -93,7 +97,7 @@ resource "aws_nat_gateway" "nat" {
   subnet_id     = aws_subnet.private[count.index].id
   depends_on    = [aws_internet_gateway.igw]
   tags = {
-    Name = "nat-${count.index}"
+    Name = "enpm818n-nat-gateway-${count.index}"
   }
 }
 
@@ -104,7 +108,7 @@ resource "aws_route_table" "private" {
     cidr_block     = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.nat[count.index].id
   }
-  tags = { Name = "private-rt-${count.index}" }
+  tags = { Name = "enpm818n-private-rt-${count.index}" }
 }
 
 resource "aws_route_table_association" "private_assoc" {
@@ -123,6 +127,7 @@ data "aws_ami" "ubuntu" {
 }
 
 resource "aws_launch_template" "app_template" {
+  name = "enpm818n-app-template"
   image_id               = data.aws_ami.ubuntu.id
   instance_type          = "t2.micro"
   user_data              = base64encode(file("./userdata.sh"))
@@ -149,6 +154,7 @@ resource "aws_launch_template" "app_template" {
 }
 
 resource "aws_autoscaling_group" "asg" {
+  name = "enpm818n-asg"
   desired_capacity    = 1
   min_size            = 1
   max_size            = 3
@@ -162,7 +168,7 @@ resource "aws_autoscaling_group" "asg" {
 }
 
 resource "aws_autoscaling_policy" "cpu_policy" {
-  name                   = "cpu_policy"
+  name                   = "enpm818n-cpu-policy"
   autoscaling_group_name = aws_autoscaling_group.asg.name
   policy_type            = "TargetTrackingScaling"
 
@@ -175,7 +181,7 @@ resource "aws_autoscaling_policy" "cpu_policy" {
 }
 
 resource "aws_autoscaling_policy" "memory_policy" {
-  name                   = "memory_policy"
+  name                   = "enpm818n-memory-policy"
   autoscaling_group_name = aws_autoscaling_group.asg.name
   policy_type            = "TargetTrackingScaling"
 
@@ -190,7 +196,7 @@ resource "aws_autoscaling_policy" "memory_policy" {
 }
 
 resource "aws_lb" "alb" {
-  name                       = "alb"
+  name                       = "enpm818n-alb"
   internal                   = false
   load_balancer_type         = "application"
   security_groups            = [aws_security_group.alb.id]
@@ -199,7 +205,7 @@ resource "aws_lb" "alb" {
 }
 
 resource "aws_lb_target_group" "alb_tg" {
-  name     = "alb-tg"
+  name     = "enpm818n-alb-tg"
   port     = 80
   protocol = "HTTP"
   vpc_id   = aws_vpc.main.id
@@ -217,6 +223,9 @@ resource "aws_lb_listener" "alb_listener" {
   load_balancer_arn = aws_lb.alb.arn
   port              = 80
   protocol          = "HTTP"
+  tags = {
+    Name = "enpm818n-alb-listener"
+  }
 
   default_action {
     type             = "forward"
@@ -225,7 +234,7 @@ resource "aws_lb_listener" "alb_listener" {
 }
 
 resource "aws_security_group" "alb" {
-  name        = "alb_sg"
+  name        = "enpm818n-alb-sg"
   description = "Allow inbound HTTP traffic and all outbound traffic"
   vpc_id      = aws_vpc.main.id
 
@@ -241,10 +250,13 @@ resource "aws_security_group" "alb" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  tags = {
+    Name = "enpm818n-alb-sg"
+  }
 }
 
 resource "aws_security_group" "instances" {
-  name        = "instances-sg"
+  name        = "enpm818n-web-sg"
   description = "Allow HTTP from ALB and all outbound traffic"
   vpc_id      = aws_vpc.main.id
 
@@ -270,34 +282,39 @@ resource "aws_security_group" "instances" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  tags = {
+    Name = "enpm818n-web-sg"
+  }
 }
 
 resource "aws_db_subnet_group" "rds" {
-  name       = "rds-subnet-group"
+  name       = "enpm818n-db-subnet-group"
   subnet_ids = aws_subnet.private[*].id
   tags = {
-    Name = "rds-subnet-group"
+    Name = "enpm818n-db-subnet-group"
   }
 }
 
 resource "aws_db_instance" "rds" {
-  db_name                     = "app_rds"
+  identifier                  = "enpm818n-rds-db"
   allocated_storage           = 10
   max_allocated_storage       = 50
+  db_name                     = "mydb"
   engine                      = "mysql"
   engine_version              = "8.0"
   instance_class              = "db.t2.micro"
   username                    = "admin"
   manage_master_user_password = true # managed master password via secrets manager (default KMS key)
   parameter_group_name        = "default.mysql8.0"
-  db_subnet_group_name        = aws_db_subnet_group.rds.name
+  db_subnet_group_name        = aws_db_subnet_group.main.name
   deletion_protection         = false
+  vpc_security_group_ids      = [aws_security_group.db_sg.id]
   storage_encrypted           = true
   multi_az                    = true
 }
 
 resource "aws_security_group" "rds" {
-  name        = "rds-sg"
+  name        = "enpm818n-db-sg"
   description = "Allow MySQL from app instances"
   vpc_id      = aws_vpc.main.id
 
@@ -314,5 +331,8 @@ resource "aws_security_group" "rds" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+   tags = {
+    Name = "enpm818n-db-sg"
   }
 }
