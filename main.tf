@@ -295,22 +295,64 @@ resource "aws_db_subnet_group" "rds" {
   }
 }
 
+
+data "aws_iam_policy_document" "rds_assume_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["monitoring.rds.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "rds_monitoring" {
+  name               = "enpm818n-rds-monitoring-role"
+  assume_role_policy = data.aws_iam_policy_document.rds_assume_role.json
+
+  tags = {
+    Name = "enpm818n-rds-monitoring-role"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "rds_monitoring_attachment" {
+  role       = aws_iam_role.rds_monitoring.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
+}
+
 resource "aws_db_instance" "rds" {
   identifier                  = "enpm818n-rds-db"
-  allocated_storage           = 10
-  max_allocated_storage       = 50
+  allocated_storage           = 20
+  max_allocated_storage       = 100 
+  storage_type                = "gp2"
   db_name                     = "mydb"
   engine                      = "mysql"
-  engine_version              = "8.0"
-  instance_class              = "db.t2.micro"
+  engine_version              = "8.0.43"
+  instance_class              = "db.m5.large"
   username                    = "admin"
-  manage_master_user_password = true # managed master password via secrets manager (default KMS key)
+  manage_master_user_password = true 
   parameter_group_name        = "default.mysql8.0"
-  db_subnet_group_name        = aws_db_subnet_group.main.name
-  deletion_protection         = false
-  vpc_security_group_ids      = [aws_security_group.db_sg.id]
-  storage_encrypted           = true
+  skip_final_snapshot         = true
+  db_subnet_group_name        = aws_db_subnet_group.rds.name
+  vpc_security_group_ids      = [aws_security_group.rds.id]
   multi_az                    = true
+  storage_encrypted           = true
+
+
+  performance_insights_enabled          = true
+  performance_insights_retention_period = 7 
+  monitoring_interval                   = 60
+  monitoring_role_arn                   = aws_iam_role.rds_monitoring.arn
+
+  deletion_protection = true
+
+  backup_retention_period = 7
+  backup_window           = "03:00-06:00"
+  maintenance_window      = "Mon:00:00-Mon:03:00"
+
+  tags = {
+    Name = "enpm818n-rds-db"
+  }
 }
 
 resource "aws_security_group" "rds" {
