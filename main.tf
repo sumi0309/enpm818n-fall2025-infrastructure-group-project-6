@@ -58,7 +58,7 @@ resource "aws_subnet" "private" {
   }
 }
 
-resource "aws_internet_gateway" "gw" {
+resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
 
   tags = {
@@ -377,4 +377,108 @@ resource "aws_security_group" "rds" {
    tags = {
     Name = "enpm818n-db-sg"
   }
+}
+
+resource "aws_wafv2_web_acl" "main" {
+  name        = "enpm818n-waf-web-acl"
+  description = "WAF Web ACL for ALB"
+  scope       = "REGIONAL"
+
+  default_action {
+    allow {}
+  }
+
+  # Requirement: WAF Rules for SQLi
+  rule {
+    name     = "AWS-AWSManagedRulesSQLiRuleSet"
+    priority = 10
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesSQLiRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "enpm818n-waf-sqli"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Requirement: WAF Rules for XSS (Part of Common Rule Set)
+  rule {
+    name     = "AWS-AWSManagedRulesCommonRuleSet"
+    priority = 20
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "enpm818n-waf-common"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Requirement: WAF custom rule
+  # This rule blocks requests containing "blockme" in the "x-custom-header" header
+  rule {
+    name     = "enpm818n-custom-block-rule"
+    priority = 30
+
+    action {
+      block {}
+    }
+
+    statement {
+      byte_match_statement {
+        search_string = "blockme"
+        field_to_match {
+          single_header {
+            name = "x-custom-header"
+          }
+        }
+        text_transformation {
+          priority = 0
+          type     = "NONE"
+        }
+        positional_constraint = "CONTAINS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "enpm818n-waf-custom"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "enpm818n-waf-main"
+    sampled_requests_enabled   = true
+  }
+
+  tags = {
+    Name = "enpm818n-waf-web-acl"
+  }
+}
+
+resource "aws_wafv2_web_acl_association" "main" {
+  resource_arn = aws_lb.alb.arn
+  web_acl_arn  = aws_wafv2_web_acl.main.arn
 }
