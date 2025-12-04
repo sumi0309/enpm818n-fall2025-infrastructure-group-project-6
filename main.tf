@@ -581,3 +581,102 @@ data "aws_iam_policy_document" "cdn_bucket" {
     }
   }
 }
+
+resource "aws_cloudwatch_dashboard" "main" {
+  dashboard_name = "enpm818n-dashboard"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type = "metric",
+        properties = {
+          title = "ALB TargetResponseTime (Latency)"
+          metrics = [
+            [ "AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", aws_lb.alb.arn_suffix ],
+          ]
+          period = 60
+          stat   = "Average"
+        }
+      },
+      {
+        type = "metric",
+        properties = {
+          title = "ALB 5XX Error Count"
+          metrics = [
+            [ "AWS/ApplicationELB", "HTTPCode_ELB_5XX_Count", "LoadBalancer", aws_lb.alb.arn_suffix ],
+          ]
+          period = 60
+          stat   = "Sum"
+        }
+      },
+      {
+        type = "metric",
+        properties = {
+          title = "ASG CPU Utilization"
+          metrics = [
+            [ "AWS/EC2", "CPUUtilization", "AutoScalingGroupName", aws_autoscaling_group.asg.name ],
+          ]
+          period = 60
+          stat   = "Average"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_sns_topic" "alerts" {
+  name = "enpm818n-alerts"
+}
+
+resource "aws_sns_topic_subscription" "email" {
+  topic_arn = aws_sns_topic.alerts.arn
+  protocol  = "email"
+  endpoint  = "chalhus@umd.edu"  
+}
+
+resource "aws_cloudwatch_metric_alarm" "alb_latency_high" {
+  alarm_name          = "enpm818n-alb-high-latency"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "TargetResponseTime"
+  namespace           = "AWS/ApplicationELB"
+  period              = 60
+  statistic           = "Average"
+  threshold           = 0.5
+  alarm_description   = "ALB latency above 0.5s"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+
+  dimensions = {
+    LoadBalancer = aws_lb.alb.arn_suffix
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "alb_5xx_errors" {
+  alarm_name          = "enpm818n-alb-5xx-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "HTTPCode_ELB_5XX_Count"
+  namespace           = "AWS/ApplicationELB"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 5
+  alarm_description   = "ALB 5XX errors detected"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+
+  dimensions = {
+    LoadBalancer = aws_lb.alb.arn_suffix
+  }
+}
+
+resource "aws_s3_bucket" "cloudtrail" {
+  bucket = "enpm818n-cloudtrail-logs-${random_id.cdn_rand.hex}"
+  force_destroy = true
+}
+
+resource "aws_cloudtrail" "main" {
+  name                          = "enpm818n-cloudtrail"
+  s3_bucket_name                = aws_s3_bucket.cloudtrail.bucket
+  include_global_service_events = true
+  is_multi_region_trail         = true
+  enable_logging                = true
+}
