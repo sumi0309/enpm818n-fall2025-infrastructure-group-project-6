@@ -19,6 +19,14 @@ provider "aws" {
   profile                  = "PowerUserAccess-408876511723"
 }
 
+data "aws_secretsmanager_secret" "db_secret" {
+  name = "enpm818n-secrets-manager"
+}
+
+data "aws_secretsmanager_secret_version" "db_secret_val" {
+  secret_id = data.aws_secretsmanager_secret.db_secret.id
+}
+
 # --- VPC & Networking (Naming: enpm818n-*) ---
 
 resource "aws_vpc" "main" {
@@ -147,33 +155,56 @@ data "aws_ami" "ubuntu" {
   owners = ["099720109477"]
 }
 
+resource "aws_iam_role" "ec2_role" {
+  name = "enpm818n-ec2-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "secrets_policy" {
+  name = "enpm818n-secrets-policy"
+  role = aws_iam_role.ec2_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = data.aws_secretsmanager_secret.db_secret.arn
+    }]
+  })
+}
+
+resource "aws_iam_instance_profile" "ec2_profile" {
+  name = "enpm818n-ec2-profile"
+  role = aws_iam_role.ec2_role.name
+}
+
 resource "aws_launch_template" "app_template" {
   name          = "enpm818n-app-template"
   image_id      = data.aws_ami.ubuntu.id
   instance_type = "t2.micro"
 
+  iam_instance_profile {
+    name = aws_iam_instance_profile.ec2_profile.name
+  }
+
   # Requirement: Install stress-ng and E-commerce platform
-  user_data = base64encode(<<-EOF
-              #!/bin/bash
-              apt-get update -y
-              
-              # Requirement: Install stress-ng
-              apt-get install -y stress-ng
-              
-              # Install Web Server (Apache/PHP) for E-Commerce
-              apt-get install -y apache2 php php-mysql git
-              systemctl start apache2
-              systemctl enable apache2
-              
-              # Requirement: Download and deploy E-Commerce Platform
-              cd /var/www/html
-              rm index.html
-              # REPLACE THE LINK BELOW WITH YOUR SPECIFIC REPO URL
-              # git clone https://github.com/your-repo/ecommerce-platform.git .
-              
-              echo "<h1>ENPM818N Project - App Ready</h1>" > index.html
-              EOF
-  )
+  user_data = base64encode(templatefile("${path.module}/userdata.sh", {
+    # We pass the endpoint and DB name directly
+    db_endpoint = split(":", aws_db_instance.rds.endpoint)[0]
+    db_name     = aws_db_instance.rds.db_name
+    # We pass the secret name so the script can fetch the password itself
+    secret_name = "enpm818n-secrets-manager"
+    region      = "us-east-1"
+  }))
 
   network_interfaces {
     associate_public_ip_address = true
@@ -360,12 +391,13 @@ resource "aws_db_instance" "rds" {
   allocated_storage            = 20
   max_allocated_storage        = 100
   storage_type                 = "gp2"
-  db_name                      = "mydb"
+  db_name                      = "ecommerce_1"
   engine                       = "mysql"
   engine_version               = "8.0.43"
   instance_class               = "db.m5.large"
-  username                     = "admin"
-  manage_master_user_password  = true
+  username                    = jsondecode(data.aws_secretsmanager_secret_version.db_secret_val.secret_string)["username"]
+  password                    = jsondecode(data.aws_secretsmanager_secret_version.db_secret_val.secret_string)["password"]
+  manage_master_user_password = false 
   skip_final_snapshot          = true
   db_subnet_group_name         = aws_db_subnet_group.rds.name
   vpc_security_group_ids       = [aws_security_group.rds.id]
