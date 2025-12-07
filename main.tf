@@ -9,7 +9,7 @@ terraform {
       version = "~> 4.0"
     }
   }
-  required_version = ">= 1.14.0"
+  required_version = ">= 1.0.0"
 }
 
 provider "aws" {
@@ -77,9 +77,9 @@ resource "aws_route_table_association" "public_assoc" {
 }
 
 resource "aws_eip" "nat" {
-  count                     = 3
-  domain                    = "vpc"
-  depends_on                = [aws_internet_gateway.igw]
+  count      = 3
+  domain     = "vpc"
+  depends_on = [aws_internet_gateway.igw]
   tags = {
     Name = "enpm818n-nat-eip-${count.index}"
   }
@@ -125,7 +125,7 @@ resource "tls_self_signed_cert" "example" {
     organization = "ENPM818N Lab"
   }
   validity_period_hours = 12
-  allowed_uses = ["key_encipherment", "digital_signature", "server_auth"]
+  allowed_uses          = ["key_encipherment", "digital_signature", "server_auth"]
 }
 
 resource "aws_acm_certificate" "cert" {
@@ -148,10 +148,10 @@ data "aws_ami" "ubuntu" {
 }
 
 resource "aws_launch_template" "app_template" {
-  name = "enpm818n-app-template"
-  image_id               = data.aws_ami.ubuntu.id
-  instance_type          = "t2.micro"
-  
+  name          = "enpm818n-app-template"
+  image_id      = data.aws_ami.ubuntu.id
+  instance_type = "t2.micro"
+
   # Requirement: Install stress-ng and E-commerce platform
   user_data = base64encode(<<-EOF
               #!/bin/bash
@@ -175,13 +175,15 @@ resource "aws_launch_template" "app_template" {
               EOF
   )
 
-  vpc_security_group_ids = [aws_security_group.instances.id]
   network_interfaces {
     associate_public_ip_address = true
     security_groups             = [aws_security_group.instances.id]
   }
-  monitoring { enabled = true }
-  
+
+  monitoring {
+    enabled = true
+  }
+
   block_device_mappings {
     device_name = "/dev/xvda"
     ebs {
@@ -205,7 +207,7 @@ resource "aws_autoscaling_group" "asg" {
     id      = aws_launch_template.app_template.id
     version = "$Latest"
   }
-  
+
   # Requirement: Resource tags
   tag {
     key                 = "Name"
@@ -260,8 +262,8 @@ resource "aws_lb_listener" "alb_listener_http" {
   default_action {
     type = "redirect"
     redirect {
-      port = "443"
-      protocol = "HTTPS"
+      port        = "443"
+      protocol    = "HTTPS"
       status_code = "HTTP_301"
     }
   }
@@ -283,21 +285,21 @@ resource "aws_security_group" "alb" {
   name   = "enpm818n-alb-sg"
   vpc_id = aws_vpc.main.id
   ingress {
-    from_port = 80
-    to_port = 80
-    protocol = "tcp"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
   ingress {
-    from_port = 443
-    to_port = 443
-    protocol = "tcp"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
   egress {
-    from_port = 0
-    to_port = 0
-    protocol = "-1"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
   tags = { Name = "enpm818n-alb-sg" }
@@ -307,21 +309,21 @@ resource "aws_security_group" "instances" {
   name   = "enpm818n-web-sg"
   vpc_id = aws_vpc.main.id
   ingress {
-    from_port = 80
-    to_port = 80
-    protocol = "tcp"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
   ingress {
-    from_port = 22
-    to_port = 22
-    protocol = "tcp"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
   egress {
-    from_port = 0
-    to_port = 0
-    protocol = "-1"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
   tags = { Name = "enpm818n-web-sg" }
@@ -354,24 +356,24 @@ resource "aws_iam_role_policy_attachment" "rds_monitoring_attachment" {
 }
 
 resource "aws_db_instance" "rds" {
-  identifier                  = "enpm818n-rds-db"
-  allocated_storage           = 20
-  max_allocated_storage       = 100
-  storage_type                = "gp2"
-  db_name                     = "mydb"
-  engine                      = "mysql"
-  engine_version              = "8.0.43"
-  instance_class              = "db.m5.large"
-  username                    = "admin"
-  manage_master_user_password = true
-  skip_final_snapshot         = true
-  db_subnet_group_name        = aws_db_subnet_group.rds.name
-  vpc_security_group_ids      = [aws_security_group.rds.id]
-  multi_az                    = true
-  storage_encrypted           = true # Uses default KMS
+  identifier                   = "enpm818n-rds-db"
+  allocated_storage            = 20
+  max_allocated_storage        = 100
+  storage_type                 = "gp2"
+  db_name                      = "mydb"
+  engine                       = "mysql"
+  engine_version               = "8.0.43"
+  instance_class               = "db.m5.large"
+  username                     = "admin"
+  manage_master_user_password  = true
+  skip_final_snapshot          = true
+  db_subnet_group_name         = aws_db_subnet_group.rds.name
+  vpc_security_group_ids       = [aws_security_group.rds.id]
+  multi_az                     = true
+  storage_encrypted            = true # Uses default KMS
   performance_insights_enabled = true
-  monitoring_interval         = 60
-  monitoring_role_arn         = aws_iam_role.rds_monitoring.arn
+  monitoring_interval          = 60
+  monitoring_role_arn          = aws_iam_role.rds_monitoring.arn
   tags = { Name = "enpm818n-rds-db" }
 }
 
@@ -379,15 +381,15 @@ resource "aws_security_group" "rds" {
   name   = "enpm818n-db-sg"
   vpc_id = aws_vpc.main.id
   ingress {
-    from_port = 3306
-    to_port = 3306
-    protocol = "tcp"
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
     security_groups = [aws_security_group.instances.id]
   }
   egress {
-    from_port = 0
-    to_port = 0
-    protocol = "-1"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
   tags = { Name = "enpm818n-db-sg" }
@@ -399,13 +401,18 @@ resource "aws_wafv2_web_acl" "main" {
   name        = "enpm818n-waf-web-acl"
   description = "WAF Web ACL for ALB"
   scope       = "REGIONAL"
-  default_action { allow {} }
+  default_action {
+    allow {}
+  }
 
   # Rule 1: SQL Injection
   rule {
     name     = "AWS-AWSManagedRulesSQLiRuleSet"
     priority = 10
-    override_action { none {} }
+    override_action {
+      none {}
+    }
+    
     statement {
       managed_rule_group_statement {
         name        = "AWSManagedRulesSQLiRuleSet"
@@ -423,7 +430,11 @@ resource "aws_wafv2_web_acl" "main" {
   rule {
     name     = "AWS-AWSManagedRulesCommonRuleSet"
     priority = 20
-    override_action { none {} }
+    
+    override_action {
+      none {}
+    }
+    
     statement {
       managed_rule_group_statement {
         name        = "AWSManagedRulesCommonRuleSet"
@@ -441,12 +452,17 @@ resource "aws_wafv2_web_acl" "main" {
   rule {
     name     = "enpm818n-custom-block-rule"
     priority = 30
-    action { block {} }
+    action {
+      block {}
+    }
+    
     statement {
       byte_match_statement {
         search_string = "blockme"
         field_to_match {
-          single_header { name = "x-custom-header" }
+          single_header {
+            name = "x-custom-header"
+          }
         }
         text_transformation {
           priority = 0
@@ -486,40 +502,44 @@ resource "aws_s3_bucket" "cdn_bucket" {
 }
 
 resource "aws_s3_bucket_public_access_block" "cdn_bucket_block" {
-  bucket = aws_s3_bucket.cdn_bucket.id
-  block_public_acls = true
-  block_public_policy = true
-  ignore_public_acls = true
+  bucket                  = aws_s3_bucket.cdn_bucket.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
   restrict_public_buckets = true
 }
 
 resource "aws_cloudfront_origin_access_control" "oac" {
-  name = "enpm818n-oac"
+  name                              = "enpm818n-oac"
   origin_access_control_origin_type = "s3"
-  signing_behavior = "always"
-  signing_protocol = "sigv4"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
 }
 
 resource "aws_cloudfront_distribution" "cdn" {
-  enabled = true
-  comment = "enpm818n-cloudfront"
+  enabled             = true
+  comment             = "enpm818n-cloudfront"
   default_root_object = "index.html"
-  
+
   origin {
-    domain_name = aws_s3_bucket.cdn_bucket.bucket_regional_domain_name
-    origin_id   = "enpm818n-s3-origin"
+    domain_name              = aws_s3_bucket.cdn_bucket.bucket_regional_domain_name
+    origin_id                = "enpm818n-s3-origin"
     origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
   }
-  
+
   default_cache_behavior {
-    target_origin_id = "enpm818n-s3-origin"
+    target_origin_id       = "enpm818n-s3-origin"
     viewer_protocol_policy = "redirect-to-https"
-    allowed_methods = ["GET", "HEAD"]
-    cached_methods = ["GET", "HEAD"]
-    cache_policy_id = "658327ea-f89d-4fab-a63d-7e88639e58f6" # CachingOptimized (GZIP enabled)
+    allowed_methods        = ["GET", "HEAD"]
+    cached_methods         = ["GET", "HEAD"]
+    cache_policy_id        = "658327ea-f89d-4fab-a63d-7e88639e58f6" # CachingOptimized (GZIP enabled)
   }
-  
-  restrictions { geo_restriction { restriction_type = "none" } }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
   viewer_certificate { cloudfront_default_certificate = true }
   tags = { Name = "enpm818n-cloudfront" }
 }
@@ -661,8 +681,8 @@ resource "aws_cloudwatch_dashboard" "main" {
         properties = {
           title = "ALB Latency & Errors"
           metrics = [
-            [ "AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", aws_lb.alb.arn_suffix ],
-            [ ".", "HTTPCode_ELB_5XX_Count", ".", "." ]
+            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", aws_lb.alb.arn_suffix],
+            [".", "HTTPCode_ELB_5XX_Count", ".", "."]
           ]
           period = 60
           stat   = "Average"
