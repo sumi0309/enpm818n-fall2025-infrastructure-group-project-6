@@ -4,6 +4,11 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.21.0"
     }
+    # Added TLS provider for SSL/ACM 
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
   required_version = ">= 1.14.0"
 }
@@ -117,6 +122,35 @@ resource "aws_route_table_association" "private_assoc" {
   route_table_id = aws_route_table.private[count.index].id
 }
 
+# --- ACM / SSL Setup ---
+resource "tls_private_key" "example" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_self_signed_cert" "example" {
+  private_key_pem = tls_private_key.example.private_key_pem
+
+  subject {
+    common_name  = "example.com"
+    organization = "ENPM818N Lab"
+  }
+  validity_period_hours = 12
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+}
+
+resource "aws_acm_certificate" "cert" {
+  private_key      = tls_private_key.example.private_key_pem
+  certificate_body = tls_self_signed_cert.example.cert_pem
+  tags = {
+    Name = "enpm818n-self-signed-cert"
+  }
+}
+
 data "aws_ami" "ubuntu" {
   most_recent = true
   filter {
@@ -167,17 +201,21 @@ resource "aws_autoscaling_group" "asg" {
   }
 }
 
-resource "aws_autoscaling_policy" "cpu_policy" {
-  name                   = "enpm818n-cpu-policy"
+# --- CHANGED: Explicit Scaling Policies for Alarms ---
+resource "aws_autoscaling_policy" "scale_out" {
+  name                   = "enpm818n-scale-out"
+  scaling_adjustment     = 1
+  adjustment_type        = "ChangeInCapacity"
+  cooldown               = 300
   autoscaling_group_name = aws_autoscaling_group.asg.name
-  policy_type            = "TargetTrackingScaling"
+}
 
-  target_tracking_configuration {
-    predefined_metric_specification {
-      predefined_metric_type = "ASGAverageCPUUtilization"
-    }
-    target_value = 70.0
-  }
+resource "aws_autoscaling_policy" "scale_in" {
+  name                   = "enpm818n-scale-in"
+  scaling_adjustment     = -1
+  adjustment_type        = "ChangeInCapacity"
+  cooldown               = 300
+  autoscaling_group_name = aws_autoscaling_group.asg.name
 }
 
 resource "aws_autoscaling_policy" "memory_policy" {
@@ -219,19 +257,37 @@ resource "aws_lb_target_group" "alb_tg" {
   }
 }
 
-resource "aws_lb_listener" "alb_listener" {
+# --- CHANGED: Listeners for SSL ---
+# Redirect HTTP to HTTPS
+resource "aws_lb_listener" "alb_listener_http" {
   load_balancer_arn = aws_lb.alb.arn
   port              = 80
   protocol          = "HTTP"
-  tags = {
-    Name = "enpm818n-alb-listener"
+
+  default_action {
+    type = "redirect"
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
   }
+}
+
+# HTTPS Listener
+resource "aws_lb_listener" "alb_listener_https" {
+  load_balancer_arn = aws_lb.alb.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-2016-08"
+  certificate_arn   = aws_acm_certificate.cert.arn
 
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.alb_tg.arn
   }
 }
+# ----------------------------------
 
 resource "aws_security_group" "alb" {
   name        = "enpm818n-alb-sg"
@@ -241,6 +297,13 @@ resource "aws_security_group" "alb" {
   ingress {
     from_port   = 80
     to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  # Added HTTPS ingress
+  ingress {
+    from_port   = 443
+    to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -388,7 +451,7 @@ resource "aws_wafv2_web_acl" "main" {
     allow {}
   }
 
-  # Requirement: WAF Rules for SQLi
+  # WAF Rules for SQLi
   rule {
     name     = "AWS-AWSManagedRulesSQLiRuleSet"
     priority = 10
@@ -411,7 +474,7 @@ resource "aws_wafv2_web_acl" "main" {
     }
   }
 
-  # Requirement: WAF Rules for XSS (Part of Common Rule Set)
+  # WAF Rules for XSS (Part of Common Rule Set)
   rule {
     name     = "AWS-AWSManagedRulesCommonRuleSet"
     priority = 20
@@ -434,7 +497,7 @@ resource "aws_wafv2_web_acl" "main" {
     }
   }
 
-  # Requirement: WAF custom rule
+  # : WAF custom rule
   # This rule blocks requests containing "blockme" in the "x-custom-header" header
   rule {
     name     = "enpm818n-custom-block-rule"
@@ -531,6 +594,7 @@ resource "aws_cloudfront_distribution" "cdn" {
   # DEFAULT behavior: GET/HEAD + compression
   default_cache_behavior {
     target_origin_id       = "enpm818n-s3-origin"
+    # SSL : Redirect HTTP to HTTPS
     viewer_protocol_policy = "redirect-to-https"
 
     allowed_methods = ["GET", "HEAD"]
@@ -651,6 +715,40 @@ resource "aws_cloudwatch_metric_alarm" "alb_latency_high" {
   }
 }
 
+# --- CPU Alarms for ASG Scaling (Alarms trigger scaling) ---
+resource "aws_cloudwatch_metric_alarm" "high_cpu_alarm" {
+  alarm_name          = "enpm818n-high-cpu-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = 60
+  statistic           = "Average"
+  threshold           = 70
+  alarm_description   = "Scale out if CPU > 70%"
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.asg.name
+  }
+  alarm_actions = [aws_autoscaling_policy.scale_out.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "low_cpu_alarm" {
+  alarm_name          = "enpm818n-low-cpu-alarm"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = 60
+  statistic           = "Average"
+  threshold           = 30
+  alarm_description   = "Scale in if CPU < 30%"
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.asg.name
+  }
+  alarm_actions = [aws_autoscaling_policy.scale_in.arn]
+}
+# --------------------------------------------------------------------------
+
 resource "aws_cloudwatch_metric_alarm" "alb_5xx_errors" {
   alarm_name          = "enpm818n-alb-5xx-errors"
   comparison_operator = "GreaterThanThreshold"
@@ -673,10 +771,45 @@ resource "aws_s3_bucket" "cloudtrail" {
   force_destroy = true
 }
 
+# --- CloudTrail Bucket Policy (Required for CloudTrail to function) ---
+resource "aws_s3_bucket_policy" "cloudtrail_policy" {
+  bucket = aws_s3_bucket.cloudtrail.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AWSCloudTrailAclCheck"
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudtrail.amazonaws.com"
+        }
+        Action   = "s3:GetBucketAcl"
+        Resource = aws_s3_bucket.cloudtrail.arn
+      },
+      {
+        Sid    = "AWSCloudTrailWrite"
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudtrail.amazonaws.com"
+        }
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.cloudtrail.arn}/AWSLogs/*"
+        Condition = {
+          StringEquals = {
+            "s3:x-amz-acl" = "bucket-owner-full-control"
+          }
+        }
+      }
+    ]
+  })
+}
+# -------------------------------------------------------------------------
+
 resource "aws_cloudtrail" "main" {
   name                          = "enpm818n-cloudtrail"
   s3_bucket_name                = aws_s3_bucket.cloudtrail.bucket
   include_global_service_events = true
   is_multi_region_trail         = true
   enable_logging                = true
+  depends_on                    = [aws_s3_bucket_policy.cloudtrail_policy]
 }
