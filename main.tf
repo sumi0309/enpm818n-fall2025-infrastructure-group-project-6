@@ -531,6 +531,19 @@ resource "aws_wafv2_web_acl" "main" {
                     }
                   }
                 }
+                statement {
+                  byte_match_statement {
+                    field_to_match {
+                      uri_path {}
+                    }
+                    positional_constraint = "CONTAINS"
+                    search_string         = "products.php"
+                    text_transformation {
+                      priority = 0
+                      type     = "NONE"
+                    }
+                  }
+                }
               }
             }
           }
@@ -598,6 +611,19 @@ resource "aws_wafv2_web_acl" "main" {
                     }
                     positional_constraint = "CONTAINS"
                     search_string         = "user_login.php"
+                    text_transformation {
+                      priority = 0
+                      type     = "NONE"
+                    }
+                  }
+                }
+                statement {
+                  byte_match_statement {
+                    field_to_match {
+                      uri_path {}
+                    }
+                    positional_constraint = "CONTAINS"
+                    search_string         = "products.php"
                     text_transformation {
                       priority = 0
                       type     = "NONE"
