@@ -143,21 +143,26 @@ resource "tls_private_key" "example" {
 
 resource "tls_self_signed_cert" "example" {
   private_key_pem = tls_private_key.example.private_key_pem
+
   subject {
-    common_name  = "example.com"
-    organization = "ENPM818N Lab"
+    # Updated to your specific ALB DNS Name
+    common_name  = "enpm818n-alb-1689769008.us-east-1.elb.amazonaws.com"
+    organization = "ENPM818N Group 6"
   }
-  validity_period_hours = 12
+
+  validity_period_hours = 8760 # Changed to 1 year (optional, avoids expiry during grading)
   allowed_uses          = ["key_encipherment", "digital_signature", "server_auth"]
 }
 
 resource "aws_acm_certificate" "cert" {
   private_key      = tls_private_key.example.private_key_pem
   certificate_body = tls_self_signed_cert.example.cert_pem
+
   tags = {
     Name = "enpm818n-self-signed-cert"
   }
 }
+
 
 # =================================================================================
 # PHASE 1: INFRASTRUCTURE SETUP - COMPUTE & AUTO SCALING (GRADING: RESILIENCY)
